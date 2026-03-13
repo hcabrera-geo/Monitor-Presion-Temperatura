@@ -1,14 +1,11 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime
 import io
 from fpdf import FPDF
 import base64
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 
 # Configuración de la página
 st.set_page_config(
@@ -113,36 +110,48 @@ def procesar_csv_datalogger(archivo):
 def generar_pdf_reporte(df_diario, df_filtrado, fecha_min_val, fecha_max_val, presion_min_fecha, presion_max_fecha, temp_min_fecha, temp_max_fecha, mostrar_presion, mostrar_temperatura):
     """Genera un PDF con el reporte incluyendo gráficas"""
     try:
-        # Crear gráfica para PDF con matplotlib
-        n_rows = sum([mostrar_presion, mostrar_temperatura])
-        fig_pdf, axes = plt.subplots(n_rows, 1, figsize=(10, 3 * n_rows), constrained_layout=True)
-        if n_rows == 1:
-            axes = [axes]
-        ax_idx = 0
-        if mostrar_presion:
-            ax = axes[ax_idx]
-            ax.plot(df_filtrado['DateTime'], df_filtrado['Presión'],
-                    color='#1f77b4', linewidth=1.5, marker='o', markersize=2)
-            ax.set_title("Presión en el Tiempo", fontsize=10)
-            ax.set_ylabel("Presión (Bar)")
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
-            ax.tick_params(axis='x', rotation=30, labelsize=7)
-            ax.grid(True, linestyle='--', alpha=0.5)
-            ax_idx += 1
-        if mostrar_temperatura:
-            ax = axes[ax_idx]
-            ax.plot(df_filtrado['DateTime'], df_filtrado['Temperatura'],
-                    color='#ff7f0e', linewidth=1.5, marker='o', markersize=2)
-            ax.set_title("Temperatura en el Tiempo", fontsize=10)
-            ax.set_ylabel("Temperatura (°C)")
-            ax.set_xlabel("Fecha y Hora")
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
-            ax.tick_params(axis='x', rotation=30, labelsize=7)
-            ax.grid(True, linestyle='--', alpha=0.5)
-        img_file = io.BytesIO()
-        fig_pdf.savefig(img_file, format='png', dpi=120)
-        plt.close(fig_pdf)
-        img_file.seek(0)
+        # Crear gráficas para PDF con Plotly
+        if mostrar_presion and mostrar_temperatura:
+            fig = make_subplots(
+                rows=2, cols=1,
+                subplot_titles=("Presión en el Tiempo", "Temperatura en el Tiempo"),
+                vertical_spacing=0.22
+            )
+            fig.add_trace(go.Scatter(
+                x=df_filtrado['DateTime'], y=df_filtrado['Presión'],
+                mode='lines+markers', name='Presión (Bar)',
+                line=dict(color='#1f77b4', width=2), marker=dict(size=4),
+            ), row=1, col=1)
+            fig.add_trace(go.Scatter(
+                x=df_filtrado['DateTime'], y=df_filtrado['Temperatura'],
+                mode='lines+markers', name='Temperatura (°C)',
+                line=dict(color='#ff7f0e', width=2), marker=dict(size=4),
+            ), row=2, col=1)
+            fig.update_xaxes(title_text="Fecha y Hora", row=2, col=1)
+            fig.update_yaxes(title_text="Presión (Bar)", row=1, col=1)
+            fig.update_yaxes(title_text="Temperatura (°C)", row=2, col=1)
+        else:
+            fig = go.Figure()
+            if mostrar_presion:
+                fig.add_trace(go.Scatter(
+                    x=df_filtrado['DateTime'], y=df_filtrado['Presión'],
+                    mode='lines+markers', name='Presión (Bar)',
+                    line=dict(color='#1f77b4', width=2), marker=dict(size=4),
+                ))
+                fig.update_yaxes(title_text="Presión (Bar)")
+            if mostrar_temperatura:
+                fig.add_trace(go.Scatter(
+                    x=df_filtrado['DateTime'], y=df_filtrado['Temperatura'],
+                    mode='lines+markers', name='Temperatura (°C)',
+                    line=dict(color='#ff7f0e', width=2), marker=dict(size=4),
+                ))
+                fig.update_yaxes(title_text="Temperatura (°C)")
+            fig.update_xaxes(title_text="Fecha y Hora")
+        fig.update_layout(height=560, template='plotly_white', hovermode='x unified')
+
+        # Convertir gráfica a imagen
+        img_bytes = fig.to_image(format="png", width=900, height=500)
+        img_file = io.BytesIO(img_bytes)
 
         # --- Constantes de diseño ---
         MARGIN = 15
@@ -403,31 +412,32 @@ def generar_pdf_reporte(df_diario, df_filtrado, fecha_min_val, fecha_max_val, pr
 def generar_pdf_datalogger(df_filt, df_diario_dl, activos, fi_dt, ff_dt):
     """Genera PDF del reporte DataLogger con canales configurables"""
     try:
-        # Generar figura combinada para el PDF con matplotlib
-        canales_validos = [c for c in activos if c['nombre'] in df_filt.columns]
-        n_validos = len(canales_validos)
-        if n_validos == 0:
-            return None
-        fig_dl, axes_dl = plt.subplots(n_validos, 1, figsize=(10, 3 * n_validos), constrained_layout=True)
-        if n_validos == 1:
-            axes_dl = [axes_dl]
-        for idx, c in enumerate(canales_validos):
+        # Generar figura combinada para el PDF con Plotly
+        n_act = len(activos)
+        v_spacing = max(0.06, min(0.20, 0.55 / n_act))
+        titles_pdf = [f"{c['nombre']} ({c['unidad']})" if c['unidad'] else c['nombre'] for c in activos]
+        fig_dl = make_subplots(rows=n_act, cols=1, subplot_titles=titles_pdf, vertical_spacing=v_spacing)
+        for idx, c in enumerate(activos):
             col_nombre = c['nombre']
+            if col_nombre not in df_filt.columns:
+                continue
             unidad_label = c['unidad'] if c['unidad'] else ""
-            ax = axes_dl[idx]
-            ax.plot(df_filt['DateTime'], df_filt[col_nombre],
-                    color=c['color'], linewidth=1.5, marker='o', markersize=2)
-            titulo = f"{col_nombre} ({unidad_label})" if unidad_label else col_nombre
-            ax.set_title(titulo, fontsize=10)
-            ax.set_ylabel(titulo)
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
-            ax.tick_params(axis='x', rotation=30, labelsize=7)
-            ax.grid(True, linestyle='--', alpha=0.5)
-        axes_dl[-1].set_xlabel("Fecha y Hora")
-        img_file = io.BytesIO()
-        fig_dl.savefig(img_file, format='png', dpi=120)
-        plt.close(fig_dl)
-        img_file.seek(0)
+            fig_dl.add_trace(go.Scatter(
+                x=df_filt['DateTime'], y=df_filt[col_nombre],
+                mode='lines+markers',
+                name=f"{col_nombre} ({unidad_label})" if unidad_label else col_nombre,
+                line=dict(color=c['color'], width=2), marker=dict(size=4)
+            ), row=idx + 1, col=1)
+            fig_dl.update_yaxes(
+                title_text=f"{col_nombre} ({unidad_label})" if unidad_label else col_nombre,
+                row=idx + 1, col=1
+            )
+        fig_dl.update_xaxes(title_text="Fecha y Hora", row=n_act, col=1)
+        fig_dl.update_layout(height=max(400, 200 * n_act), template='plotly_white')
+
+        # Exportar gráfica a imagen
+        img_bytes = fig_dl.to_image(format="png", width=900, height=500)
+        img_file = io.BytesIO(img_bytes)
 
         MARGIN     = 15
         PAGE_W     = 210
